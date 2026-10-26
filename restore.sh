@@ -4,13 +4,14 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-usage: bash restore.sh [--cache-dir DIR] [--file SNAPSHOT.tar.zst] [--yes] [--force]
+usage: bash restore.sh [--cache-dir DIR] [--file SNAPSHOT.tar.zst] [--yes] [--new] [--force]
 
   --cache-dir  the [state] cache_dir from your zebrad.toml (the folder that contains
                crosslink_featurenet_20260929_staking3d). Default is zebrad's own default:
                ~/.cache/zebra on Linux, ~/Library/Caches/zebra on macOS.
   --file       use a snapshot you already downloaded (its .sha256 file has to be next to it).
   --yes        don't ask before replacing the chain data.
+  --new        this node has never run yet, so there's no node data in the folder.
   --force      go ahead even if another zebrad process is running (one that isn't using this
                folder), if this machine can't check for one, or if your node uses another database version.
 
@@ -29,12 +30,13 @@ DBDIR=state/$DBV/unknowntestnet
 die() { echo "error: $*" >&2; exit 1; }
 say() { echo "> $*"; }
 
-CACHE="" FILE="" YES=0 FORCE=0 EXPLICIT=0
+CACHE="" FILE="" YES=0 NEW=0 FORCE=0 EXPLICIT=0
 while [ $# -gt 0 ]; do
     case "$1" in
-        --cache-dir) [ $# -ge 2 ] || die "--cache-dir needs a path"; CACHE=$2; EXPLICIT=1; shift 2 ;;
+        --cache-dir) [ $# -ge 2 ] && [ -n "$2" ] || die "--cache-dir needs a path"; CACHE=$2; EXPLICIT=1; shift 2 ;;
         --file) [ $# -ge 2 ] || die "--file needs a path"; FILE=$2; shift 2 ;;
         --yes|-y) YES=1; shift ;;
+        --new) NEW=1; shift ;;
         --force) FORCE=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown option $1 (see --help)" ;;
@@ -56,9 +58,14 @@ if [ "$EXPLICIT" = 1 ]; then
 fi
 TARGET=$CACHE/$NET
 
-# Root restores into root's cache. If the node's files belong to someone else, the node couldn't write them after.
-if [ "$(id -u)" = 0 ] && [ -e "$CACHE" ] && [ "$(ls -nd "$CACHE" | awk '{print $3}')" != 0 ]; then
-    die "you're root but $CACHE belongs to another user. Run this as the user that runs zebrad"
+# Under sudo the default folder is root's, not the node's. And if the node's files belong to someone else, root
+# would leave them files the node can't write.
+if [ "$(id -u)" = 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$EXPLICIT" = 0 ]; then
+    die "under sudo the default folder is root's. Run it as the user that runs zebrad, or pass --cache-dir"
+fi
+if [ "$(id -u)" = 0 ] && [ -e "$CACHE" ]; then
+    owner=$(ls -nd "$CACHE" | awk '{print $3}')
+    [ "$owner" = 0 ] || die "you're root but $CACHE belongs to user id $owner. Run it as that user, eg: sudo -u '#$owner' bash restore.sh --cache-dir $CACHE"
 fi
 
 for c in tar zstd; do command -v "$c" >/dev/null || die "$c isn't installed (eg apt install zstd, or brew install zstd)"; done
@@ -91,21 +98,20 @@ if [ -d "$TARGET/state" ]; then
         die "your node uses state/$other, this snapshot is for zebrad v15 (state/$DBV). Use --force to restore anyway"
     fi
 fi
-if [ ! -e "$TARGET" ]; then
-    say "no node data at $TARGET yet (fine if your node has never run; otherwise check --cache-dir)"
-elif [ ! -e "$TARGET/secret.seed" ] && [ ! -d "$TARGET/state" ]; then
-    say "note: $TARGET has no secret.seed or state folder. Is this really your node's folder?"
+if [ ! -e "$TARGET/secret.seed" ] && [ ! -d "$TARGET/state" ] && [ "$NEW" != 1 ]; then
+    die "no node data in $TARGET. Pass your node's --cache-dir, or add --new if this node has never run yet"
 fi
 
-mkdir -p "$CACHE"
-avail_kb() { df -Pk "$CACHE" | awk 'NR==2{print $4}'; }
+mkdir -p "$CACHE" "$TARGET"
+rm -rf "$TARGET"/.restore-* "$CACHE"/.restore-*   # left by a run that was killed while unpacking
+avail_kb() { df -Pk "$1" | awk 'NR==2{print $4}'; }
 size_of() { if [ -f "$1" ]; then wc -c < "$1" | tr -d ' '; else echo 0; fi; }
 jfield() { sed -n 's/.*"'"$2"'": *"\{0,1\}\([0-9a-zA-Z:.T-]*\)"\{0,1\}.*/\1/p' "$1" | head -1; }
 
 WORK=$CACHE/.snapshot-download
 JSON=""
 if [ -z "$FILE" ]; then
-    url=$(curl -fsSIL -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest") ||
+    url=$(curl -fsSIL --connect-timeout 30 --max-time 120 -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest") ||
         die "can't reach github.com"
     case "$url" in */releases/tag/*) ;; *) die "no snapshot release found at https://github.com/$REPO/releases" ;; esac
     TAG=${url##*/}
@@ -113,8 +119,9 @@ if [ -z "$FILE" ]; then
     if [ -d "$WORK" ] && [ ! -d "$WORK/$TAG" ]; then rm -rf "$WORK"; fi   # a part download of an older snapshot
     mkdir -p "$WORK/$TAG"
     FILE=$WORK/$TAG/$ASSET
-    curl -fsSL --retry 5 -o "$FILE.sha256" "$BASE/$ASSET.sha256" || die "couldn't fetch the sha256 for $TAG"
-    curl -fsSL --retry 5 -o "$WORK/$TAG/$INFO" "$BASE/$INFO" || true
+    curl -fsSL --retry 5 --connect-timeout 30 --max-time 120 -o "$FILE.sha256" "$BASE/$ASSET.sha256" ||
+        die "couldn't fetch the sha256 for $TAG"
+    curl -fsSL --retry 5 --connect-timeout 30 --max-time 120 -o "$WORK/$TAG/$INFO" "$BASE/$INFO" || true
     want=$(awk '{print $1; exit}' "$FILE.sha256")
     expected=""; unpacked=0
     if [ -f "$WORK/$TAG/$INFO" ]; then expected=$(jfield "$WORK/$TAG/$INFO" bytes); unpacked=$(jfield "$WORK/$TAG/$INFO" unpacked_bytes); fi
@@ -124,8 +131,8 @@ if [ -z "$FILE" ]; then
         rm -f "$FILE"; have=0   # complete but damaged: start over
     fi
     if [ -n "$expected" ] && [ "$have" -lt "$expected" ]; then
-        need=$(( (expected - have + ${unpacked:-0}) / 1024 + 102400 ))
-        [ "$(avail_kb)" -gt "$need" ] || die "not enough space in $CACHE: need about $(( need / 1024 )) MB"
+        need=$(( (expected - have) / 1024 + 102400 ))
+        [ "$(avail_kb "$CACHE")" -gt "$need" ] || die "not enough space in $CACHE: need about $(( need / 1024 )) MB to download"
     fi
     if [ -n "$expected" ] && [ "$have" -ge "$expected" ]; then
         say "snapshot $TAG already downloaded"
@@ -174,12 +181,13 @@ rc=0; grep -v -E "^$NET/(state|non_finalized_state)(/[A-Za-z0-9._-]+)*/?\$" "$LI
 rc=0; grep -E '(^|/)\.\.(/|$)' "$LIST" > /dev/null || rc=$?
 [ "$rc" = 1 ] || die "archive has '..' paths"
 grep -q "^$NET/$DBDIR/CURRENT\$" "$LIST" || die "archive has no state/$DBV database"
+grep -q "^$NET/non_finalized_state/" "$LIST" || die "archive has no non_finalized_state folder"
 zstd -dc "$FILE" | tar -tvf - > "$LIST.v" || die "can't read the archive"
 rc=0; grep -v -E '^[-d]' "$LIST.v" > /dev/null || rc=$?
 [ "$rc" = 1 ] || die "archive has links or special files"
 
 need_kb=$(( $(zstd -dc "$FILE" | wc -c) / 1024 + 102400 ))
-[ "$(avail_kb)" -gt "$need_kb" ] || die "not enough space in $CACHE: need $(( need_kb / 1024 )) MB free to unpack"
+[ "$(avail_kb "$TARGET")" -gt "$need_kb" ] || die "not enough space in $TARGET: need $(( need_kb / 1024 )) MB free to unpack"
 
 if [ -n "$JSON" ]; then
     say "snapshot: height $J_HEIGHT, finalized $J_FIN, made $J_MADE"
@@ -188,32 +196,39 @@ fi
 if [ "$YES" != 1 ]; then
     printf "> restore into %s? [y/N] " "$CACHE"
     read -r a || a=""
-    case "$a" in y|Y|yes) ;; *) die "stopped, nothing changed" ;; esac
+    case "$a" in y|Y|yes) ;; *) [ -d "$WORK" ] && die "stopped, nothing changed (the download stays in $WORK for next time)"
+                               die "stopped, nothing changed" ;; esac
 fi
 
-# Unpack next to the node's folder, check it, then swap with renames: a failed or interrupted unpack leaves the
-# node's data exactly as it was.
+# Unpack inside the node's folder (same disk, so the swap is two renames), check it, then swap: a failed or
+# interrupted unpack leaves the node's data exactly as it was.
 STAMP=$(date +%Y%m%d-%H%M%S)
-STAGING=$CACHE/.restore-$STAMP
-mkdir -p "$STAGING" "$TARGET"
+STAGING=$TARGET/.restore-$STAMP
+mkdir -p "$STAGING"
 say "unpacking"
 zstd -dc "$FILE" | tar -xf - --no-same-owner -C "$STAGING" || die "unpack failed, nothing changed"
 [ -f "$STAGING/$NET/$DBDIR/CURRENT" ] && [ -f "$STAGING/$NET/$DBDIR/version" ] || die "unpack incomplete, nothing changed"
 node_check   # again: the download and the question can take a while
 
 moved="" placed=""
+# Undo the swap: drop whatever is in place of a moved folder (new or half-moved), then put the old one back.
 rollback() {
-    for d in $placed; do rm -rf "${TARGET:?}/$d"; done
-    for d in $moved; do mv "$TARGET/$d.bak-$STAMP" "$TARGET/$d"; done
+    local x ok=1
+    for x in $moved; do
+        rm -rf "${TARGET:?}/$x"
+        mv "$TARGET/$x.bak-$STAMP" "$TARGET/$x" || ok=0
+    done
+    for x in $placed; do case " $moved " in *" $x "*) ;; *) rm -rf "${TARGET:?}/$x" ;; esac; done
+    [ "$ok" = 1 ] && echo "put the old data back" || echo "COULDN'T PUT IT ALL BACK, your old data is in $TARGET/*.bak-$STAMP"
 }
 for d in state non_finalized_state; do
     if [ -e "$TARGET/$d" ]; then
-        mv "$TARGET/$d" "$TARGET/$d.bak-$STAMP" || { rollback; die "couldn't move $d aside, nothing changed"; }
+        mv "$TARGET/$d" "$TARGET/$d.bak-$STAMP" || die "couldn't move $d aside: $(rollback)"
         moved="$moved $d"
     fi
 done
 for d in state non_finalized_state; do
-    mv "$STAGING/$NET/$d" "$TARGET/$d" || { rollback; die "couldn't move the new $d in, put the old data back"; }
+    mv "$STAGING/$NET/$d" "$TARGET/$d" || die "couldn't move the new $d in: $(rollback)"
     placed="$placed $d"
 done
 case "$FILE" in "$WORK"/*) rm -rf "$WORK" ;; esac
@@ -221,8 +236,8 @@ case "$FILE" in "$WORK"/*) rm -rf "$WORK" ;; esac
 echo
 say "done. Start your node again, it catches up from the snapshot height."
 if [ -n "$JSON" ]; then
-    say "check: block $J_FIN should be $J_FINHASH"
-    say "(compare on https://crosslink.staker.space or with a node you trust)"
+    say "then check you're on the right chain: ask your node for block $J_FIN (eg getblockhash $J_FIN over RPC)"
+    say "and compare it with https://crosslink.staker.space. It should be $J_FINHASH"
 fi
 baks=$(ls -d "$TARGET"/*.bak-* 2>/dev/null || true)
 [ -z "$baks" ] || { say "old data (delete once your node runs fine):"; echo "$baks" | sed 's/^/    /'; }
