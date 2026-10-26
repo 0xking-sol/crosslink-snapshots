@@ -155,6 +155,12 @@ fi
 for j in "${FILE%.tar.zst}.json" "$(dirname "$FILE")/$INFO"; do
     if [ -f "$j" ] && [ "$(jfield "$j" sha256)" = "$got" ]; then JSON=$j; break; fi
 done
+# Read it now: a downloaded json goes with the download folder, which is deleted after the swap.
+J_HEIGHT="" J_FIN="" J_FINHASH="" J_MADE=""
+if [ -n "$JSON" ]; then
+    J_HEIGHT=$(jfield "$JSON" height); J_FIN=$(jfield "$JSON" finalized_height)
+    J_FINHASH=$(jfield "$JSON" finalized_hash); J_MADE=$(jfield "$JSON" created_utc)
+fi
 
 # Only the two chain folders, plain files and folders, nothing that climbs out. grep exit 1 = no bad lines;
 # anything else (bad lines, or grep failing) stops here.
@@ -176,7 +182,7 @@ need_kb=$(( $(zstd -dc "$FILE" | wc -c) / 1024 + 102400 ))
 [ "$(avail_kb)" -gt "$need_kb" ] || die "not enough space in $CACHE: need $(( need_kb / 1024 )) MB free to unpack"
 
 if [ -n "$JSON" ]; then
-    say "snapshot: height $(jfield "$JSON" height), finalized $(jfield "$JSON" finalized_height), made $(jfield "$JSON" created_utc)"
+    say "snapshot: height $J_HEIGHT, finalized $J_FIN, made $J_MADE"
 fi
 [ -d "$TARGET/state" ] || [ -d "$TARGET/non_finalized_state" ] && say "your current chain data in $TARGET gets moved aside (not deleted)"
 if [ "$YES" != 1 ]; then
@@ -215,7 +221,7 @@ case "$FILE" in "$WORK"/*) rm -rf "$WORK" ;; esac
 echo
 say "done. Start your node again, it catches up from the snapshot height."
 if [ -n "$JSON" ]; then
-    say "check: block $(jfield "$JSON" finalized_height) should be $(jfield "$JSON" finalized_hash)"
+    say "check: block $J_FIN should be $J_FINHASH"
     say "(compare on https://crosslink.staker.space or with a node you trust)"
 fi
 baks=$(ls -d "$TARGET"/*.bak-* 2>/dev/null || true)
