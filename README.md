@@ -1,6 +1,6 @@
 # crosslink-snapshots
 
-Daily snapshots of the Crosslink feature-net chain database (zebrad v15), so a new node doesnt have to sync from genesis. A full sync takes around half a day right now. With a snapshot its the download plus at most about half an hour to catch up, depending on how old the snapshot is.
+Daily snapshots of the Crosslink feature-net chain database (made with the latest zebrad release), so a new node doesnt have to sync from genesis. A full sync takes around half a day right now. With a snapshot its the download plus at most about half an hour to catch up, depending on how old the snapshot is.
 
 **use**
 
@@ -17,10 +17,10 @@ If your zebrad.toml sets `cache_dir` under `[state]`, pass the same path: `bash 
 
 **trust**
 
-A node doesnt re-check a database you copy in, so using a snapshot means trusting whoever made it. Each one is made from a v15 node I run, after checking it's synced and on the same chain as staker.space. Once your node is running, ask it for the hash of the finalized block the script names at the end (eg `getblockhash` over RPC) and compare it with https://crosslink.staker.space. That shows you're on the right chain. The rest of the database you're trusting me on.
+A node doesnt re-check a database you copy in, so using a snapshot means trusting whoever made it. Each one is made from a node I run on the latest release, after checking it's synced and on the same chain as staker.space. Once your node is running, ask it for the hash of the finalized block the script names at the end (eg `getblockhash` over RPC) and compare it with https://crosslink.staker.space. That shows you're on the right chain. The rest of the database you're trusting me on.
 
 **whats in it**
 
-- Only `state/` and `non_finalized_state/`. No secret.seed, wallet, keys or logs. v15 keeps the BFT chain inside the database so theres no pos.chain.
+- Only `state/` and `non_finalized_state/`. No secret.seed, wallet, keys or logs. The BFT chain is inside the database so theres no pos.chain.
 - A new snapshot every day, the last 3 are kept.
-- For zebrad v15 only. A release that upgrades the network needs new snapshots.
+- Made with the zebrad release named in the title, use that one.
