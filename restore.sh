@@ -237,7 +237,7 @@ echo
 say "done. Start your node again, it catches up from the snapshot height."
 if [ -n "$JSON" ]; then
     say "then check you're on the right chain: ask your node for block $J_FIN (eg getblockhash $J_FIN over RPC)"
-    say "and compare it with https://crosslink.staker.space. It should be $J_FINHASH"
+    say "and compare it with https://crosslink.staker.space (or another node on the latest release if staker.space is behind). It should be $J_FINHASH"
 fi
 baks=$(ls -d "$TARGET"/*.bak-* 2>/dev/null || true)
 [ -z "$baks" ] || { say "old data (delete once your node runs fine):"; echo "$baks" | sed 's/^/    /'; }

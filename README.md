@@ -17,7 +17,7 @@ If your zebrad.toml sets `cache_dir` under `[state]`, pass the same path: `bash 
 
 **trust**
 
-A node doesnt re-check a database you copy in, so using a snapshot means trusting whoever made it. Each one is made from a node I run on the latest release, after checking it's synced and on the same chain as staker.space. Once your node is running, ask it for the hash of the finalized block the script names at the end (eg `getblockhash` over RPC) and compare it with https://crosslink.staker.space. That shows you're on the right chain. The rest of the database you're trusting me on.
+A node doesnt re-check a database you copy in, so using a snapshot means trusting whoever made it. Each one is made from a node I run on the latest release, after checking it's synced and on the same chain as staker.space (if staker.space is stuck on an old chain, eg right after an upgrade, its checked against the finalized chain on another node instead and the release notes say so). Once your node is running, ask it for the hash of the finalized block the script names at the end (eg `getblockhash` over RPC) and compare it with https://crosslink.staker.space, or another node on the latest release if staker.space is behind. That shows you're on the right chain. The rest of the database you're trusting me on.
 
 **whats in it**
 
